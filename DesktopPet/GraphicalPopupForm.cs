@@ -13,7 +13,8 @@ namespace DesktopPet
     {
         private int hunger;
         private int loneliness;
-        private int maxValue;
+        private int maxHunger;
+        private int maxLoneliness;
 
         public GraphicalPopupForm()
         {
@@ -30,11 +31,12 @@ namespace DesktopPet
             this.TransparencyKey = Color.Magenta;
         }
 
-        public void UpdateState(int hunger, int loneliness, int max)
+        public void UpdateState(int hunger, int loneliness, int maxhunger, int maxloneliness)
         {
             this.hunger = hunger;
             this.loneliness = loneliness;
-            this.maxValue = max;
+            this.maxHunger = maxhunger;
+            this.maxLoneliness = maxloneliness;
             Invalidate();
         }
 
@@ -69,7 +71,7 @@ namespace DesktopPet
                 g.DrawString("Голод", font, Brushes.Black, margin, margin);
             }
             Rectangle hungerBarRect = new Rectangle(margin, margin + 20, barWidth, barHeight);
-            DrawProgressBar(g, hungerBarRect, hunger, maxValue, Color.Red);
+            DrawProgressBar(g, hungerBarRect, hunger, maxHunger, Color.Red);
 
             // Рисуем метку и индикатор для "Одиночества"
             using (Font font = new Font("Segoe UI", 9))
@@ -77,7 +79,7 @@ namespace DesktopPet
                 g.DrawString("Одиночество", font, Brushes.Black, margin, margin + 45);
             }
             Rectangle lonelinessBarRect = new Rectangle(margin, margin + 65, barWidth, barHeight);
-            DrawProgressBar(g, lonelinessBarRect, loneliness, maxValue, Color.Green);
+            DrawProgressBar(g, lonelinessBarRect, loneliness, maxLoneliness, Color.Green);
         }
 
         private void DrawProgressBar(Graphics g, Rectangle rect, int value, int max, Color fillColor)

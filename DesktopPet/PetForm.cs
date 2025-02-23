@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
-using Timer = System.Windows.Forms.Timer; // для SystemEvents
+using Timer = System.Windows.Forms.Timer;
 
 namespace DesktopPet
 {
@@ -24,7 +27,8 @@ namespace DesktopPet
         // Состояния питомца
         private int hunger;       // Голод
         private int loneliness;   // Одиночество
-        private const int MAX_STATE = 100;
+        private const int MAX_HUNGER_STATE = 100;
+        private const int MAX_LONELINESS_STATE = 300;
         private DateTime petCreationTime;
         private bool isDead;
 
@@ -34,25 +38,49 @@ namespace DesktopPet
         private Rectangle petButtonRect;
         private Rectangle buryButtonRect; // для мёртвого питомца
 
-        // Графическое всплывающее окно для состояний (описанный ранее класс)
-        private GraphicalPopupForm popupForm; 
-        
+        // Графическое всплывающее окно для состояний
+        private GraphicalPopupForm popupForm;
+
         public static List<TimeSpan> deadPetLifespans = new List<TimeSpan>();
 
+        // --- P/Invoke для получения положения панели задач ---
+        private const UInt32 ABM_GETTASKBARPOS = 5;
+
+        [DllImport("shell32.dll", SetLastError = true)]
+        static extern UInt32 SHAppBarMessage(UInt32 dwMessage, ref APPBARDATA pData);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int left, top, right, bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct APPBARDATA
+        {
+            public UInt32 cbSize;
+            public IntPtr hWnd;
+            public UInt32 uCallbackMessage;
+            public UInt32 uEdge;
+            public RECT rc;
+            public Int32 lParam;
+        }
+        // -------------------------------------------------------
 
         public PetForm()
         {
-            // Настройка формы – небольшое окно под размер питомца
+            // Задаём фиксированные размеры окна питомца (например, 120×120)
+            this.ClientSize = new Size(120, 120);
             this.FormBorderStyle = FormBorderStyle.None;
             this.TopMost = true;
             this.ShowInTaskbar = false;
             this.BackColor = Color.Magenta;
             this.TransparencyKey = Color.Magenta;
 
-            // Загрузка изображения питомца
+            // Загрузка изображения питомца (оригинальный ресурс)
             try
             {
-                petImage = Image.FromFile("pet.png");
+                petImage = Image.FromFile("Images/Capy/frame_0.png");
             }
             catch
             {
@@ -63,15 +91,15 @@ namespace DesktopPet
                     g.FillEllipse(Brushes.Blue, 0, 0, 100, 100);
                 }
             }
-            this.ClientSize = petImage.Size;
+            // Не используем размер изображения для окна – используем фиксированные размеры
 
-            // Инициализация позиции – случайное положение по горизонтали в пределах рабочей области
-            Rectangle workingArea = SystemInformation.WorkingArea;
+            // Инициализация позиции – случайное положение по горизонтали
+            Rectangle screenBounds = Screen.PrimaryScreen.Bounds;
             Random rand = new Random();
-            currentX = rand.Next(workingArea.Left, workingArea.Right - this.Width);
+            currentX = rand.Next(screenBounds.Left, screenBounds.Right - this.Width);
             targetX = currentX;
-            int targetY = workingArea.Bottom - this.Height;
-            this.Location = new Point((int)currentX, targetY);
+            UpdateVerticalPosition(); // устанавливаем вертикальную позицию
+            // После UpdateVerticalPosition() this.Location.Y выставится корректно
 
             // Инициализация состояний
             hunger = 0;
@@ -102,32 +130,57 @@ namespace DesktopPet
 
             this.DoubleBuffered = true;
 
-            // Подписка на системное событие для отслеживания изменений рабочей области (например, появление панели задач)
             SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
         }
 
         private void SystemEvents_UserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
         {
-            // Обновляем вертикальную позицию при изменениях в системе
             UpdateVerticalPosition();
         }
 
+        // Получает положение панели задач через SHAppBarMessage
+        private Rectangle GetTaskbarRectangle()
+        {
+            APPBARDATA data = new APPBARDATA();
+            data.cbSize = (uint)Marshal.SizeOf(typeof(APPBARDATA));
+            UInt32 result = SHAppBarMessage(ABM_GETTASKBARPOS, ref data);
+            if (result != 0)
+            {
+                return new Rectangle(data.rc.left, data.rc.top, data.rc.right - data.rc.left, data.rc.bottom - data.rc.top);
+            }
+            return Screen.PrimaryScreen.WorkingArea;
+        }
+
+        // Обновляет вертикальную позицию питомца:
+        // Если панель задач видна – питомец располагается сразу над ней,
+        // если скрыта – у нижней границы экрана.
         private void UpdateVerticalPosition()
         {
-            Rectangle workingArea = SystemInformation.WorkingArea;
-            int targetY = workingArea.Bottom - this.Height;
+            Rectangle screenBounds = Screen.PrimaryScreen.Bounds;
+            Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
+            int tolerance = 5;
+
+            int targetY;
+            if (Math.Abs(screenBounds.Bottom - workingArea.Bottom) <= tolerance)
+            {
+                targetY = screenBounds.Bottom - this.Height;
+            }
+            else
+            {
+                Rectangle taskbarRect = GetTaskbarRectangle();
+                targetY = taskbarRect.Top - this.Height;
+            }
             this.Location = new Point(this.Location.X, targetY);
         }
 
         private void MoveTimer_Tick(object sender, EventArgs e)
         {
-            // Обновляем вертикальную позицию, чтобы питомец всегда был над панелью задач
             UpdateVerticalPosition();
 
             if (isDead)
                 return;
 
-            Rectangle workingArea = SystemInformation.WorkingArea;
+            Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
             if (isPaused)
             {
                 pauseTicks--;
@@ -140,6 +193,8 @@ namespace DesktopPet
             }
             else
             {
+                if (isHovering) // Если мышь над питомцем, не двигаем его
+                    return;
                 if (Math.Abs(currentX - targetX) < Speed)
                 {
                     currentX = targetX;
@@ -164,46 +219,66 @@ namespace DesktopPet
             loneliness++;
 
             if (popupForm.Visible)
-                popupForm.UpdateState(hunger, loneliness, MAX_STATE);
+                popupForm.UpdateState(hunger, loneliness, MAX_HUNGER_STATE, MAX_LONELINESS_STATE);
 
-            if (hunger >= MAX_STATE && loneliness >= MAX_STATE)
+            if (hunger >= MAX_HUNGER_STATE || loneliness >= MAX_LONELINESS_STATE)
                 PetDies();
         }
+
         private void PetDies()
         {
             isDead = true;
             moveTimer.Stop();
             stateTimer.Stop();
-            // Сохраняем продолжительность жизни питомца
             TimeSpan lifespan = DateTime.Now - petCreationTime;
             deadPetLifespans.Add(lifespan);
             Invalidate();
             MessageBox.Show("Питомец умер...");
         }
-
         private void PetForm_MouseEnter(object sender, EventArgs e)
         {
             isHovering = true;
-            // Позиционируем всплывающее окно чуть выше питомца
-            Point popupLocation = new Point(this.Location.X, this.Location.Y - popupForm.Height - 5);
+
+            // Центрируем всплывающее окно относительно питомца
+            Point popupLocation = new Point(
+                this.Location.X + (this.Width - popupForm.Width) / 2,
+                this.Location.Y - popupForm.Height - 5
+            );
             popupForm.Location = popupLocation;
-            popupForm.UpdateState(hunger, loneliness, MAX_STATE);
+            popupForm.UpdateState(hunger, loneliness, MAX_HUNGER_STATE, MAX_LONELINESS_STATE);
             popupForm.Show();
 
-            // Определяем области кнопок с увеличенными размерами
-            int buttonWidth = 70;  // увеличено с 40 до 70
-            int buttonHeight = 30; // увеличено с 20 до 30
+            // Рассчитываем кнопки с учётом ограничений по ширине окна
+            int gap = 5;
+            int buttonHeight = 25;
+            int availableWidth = this.ClientSize.Width - 3 * gap;
+
             if (!isDead)
             {
-                // Две кнопки: слева – "Кормить", справа – "Гладить"
-                feedButtonRect = new Rectangle(5- buttonHeight/2, this.ClientSize.Height - buttonHeight - 5, buttonWidth, buttonHeight);
-                petButtonRect = new Rectangle(this.ClientSize.Width - buttonWidth + buttonHeight/2- 5, this.ClientSize.Height - buttonHeight - 5, buttonWidth, buttonHeight);
+                int buttonWidth = availableWidth / 2;
+
+                feedButtonRect = new Rectangle(
+                    gap,
+                    this.ClientSize.Height - buttonHeight - gap,
+                    buttonWidth,
+                    buttonHeight
+                );
+
+                petButtonRect = new Rectangle(
+                    2 * gap + buttonWidth,
+                    this.ClientSize.Height - buttonHeight - gap,
+                    buttonWidth,
+                    buttonHeight
+                );
             }
             else
             {
-                // Одна кнопка "Похоронить" по центру
-                int buryWidth = 120; // немного шире для размещения текста
-                buryButtonRect = new Rectangle((this.ClientSize.Width - buryWidth) / 2, this.ClientSize.Height - buttonHeight - 5, buryWidth, buttonHeight);
+                buryButtonRect = new Rectangle(
+                    gap,
+                    this.ClientSize.Height - buttonHeight - gap,
+                    availableWidth + gap,
+                    buttonHeight
+                );
             }
             Invalidate();
         }
@@ -226,13 +301,11 @@ namespace DesktopPet
                 if (feedButtonRect.Contains(e.Location))
                 {
                     hunger = 0;
-                    //MessageBox.Show("Питомец покормлен!");
                     Invalidate();
                 }
                 else if (petButtonRect.Contains(e.Location))
                 {
                     loneliness = 0;
-                    //MessageBox.Show("Питомец поглажен!");
                     Invalidate();
                 }
             }
@@ -240,7 +313,6 @@ namespace DesktopPet
             {
                 if (buryButtonRect.Contains(e.Location))
                 {
-                    // Здесь можно сохранить статистику жизни питомца
                     ResetPet();
                 }
             }
@@ -256,25 +328,40 @@ namespace DesktopPet
             stateTimer.Start();
             Invalidate();
         }
-
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            // Если питомец мёртв – рисуем его в виде чёрного эллипса,
-            // иначе отрисовываем изображение
+            // Оптимальные настройки для Pixel-Perfect рендеринга
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.None;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+
+            Rectangle destRect = new Rectangle(0, 0, this.ClientSize.Width, this.ClientSize.Height);
+
             if (isDead)
             {
-                g.FillEllipse(Brushes.Black, 0, 0, this.ClientSize.Width, this.ClientSize.Height);
+                ColorMatrix colorMatrix = new ColorMatrix(new float[][]
+                {
+                    new float[] {0,0,0,0,0},
+                    new float[] {0,0,0,0,0},
+                    new float[] {0,0,0,0,0},
+                    new float[] {0,0,0,1,0},
+                    new float[] {0,0,0,0,1}
+                });
+
+                using (ImageAttributes attributes = new ImageAttributes())
+                {
+                    attributes.SetColorMatrix(colorMatrix);
+                    g.DrawImage(petImage, destRect, 0, 0, petImage.Width, petImage.Height, GraphicsUnit.Pixel, attributes);
+                }
             }
             else
             {
-                g.DrawImage(petImage, 0, 0, this.ClientSize.Width, this.ClientSize.Height);
+                g.DrawImage(petImage, destRect);
             }
 
-            // Если курсор над питомцем – отрисовываем графические кнопки
             if (isHovering)
             {
                 if (!isDead)
@@ -289,21 +376,24 @@ namespace DesktopPet
             }
         }
 
+
         private void DrawButton(Graphics g, Rectangle rect, string text)
         {
-            // Отрисовка кнопки с закруглёнными углами и градиентом
             using (GraphicsPath path = RoundedRect(rect, 5))
             {
                 using (LinearGradientBrush brush = new LinearGradientBrush(rect, Color.LightGray, Color.Gray, LinearGradientMode.Vertical))
                 {
                     g.FillPath(brush, path);
                 }
-                g.DrawPath(Pens.Black, path);
+                // Рисуем обводку кнопки – если ранее появлялась красная, теперь используем прозрачный цвет
+                using (Pen pen = new Pen(Color.Transparent))
+                {
+                    g.DrawPath(pen, path);
+                }
             }
-            // Центрирование текста
             using (Font font = new Font("Segoe UI", 8))
             {
-                StringFormat sf = new StringFormat() { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
                 g.DrawString(text, font, Brushes.Black, rect, sf);
             }
         }
