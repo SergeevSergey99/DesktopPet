@@ -7,14 +7,14 @@ using Timer = System.Windows.Forms.Timer;
 
 namespace DesktopPet
 {
-    // Окно настроек для отображения статистики умерших питомцев
+    // пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
     public class SettingsForm : Form
     {
         private Label infoLabel;
 
         public SettingsForm()
         {
-            this.Text = "Настройки";
+            this.Text = "РќР°СЃС‚СЂРѕР№РєРё";
             this.Size = new Size(300, 200);
             infoLabel = new Label() { Location = new Point(10, 10), Size = new Size(280, 150), AutoSize = false };
             this.Controls.Add(infoLabel);
@@ -23,16 +23,15 @@ namespace DesktopPet
 
         public void UpdateInfo()
         {
-            string info = $"Количество умерших питомцев: {PetForm.deadPetLifespans.Count}\n";
+            string info = $"РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЂС‚РІС‹С… РїРёС‚РѕРјС†РµРІ: {PetForm.deadPetLifespans.Count}\n";
             for (int i = 0; i < PetForm.deadPetLifespans.Count; i++)
             {
-                info += $"Питомец {i + 1}: {PetForm.deadPetLifespans[i].TotalSeconds:F0} секунд\n";
+                info += $"РџРёС‚РѕРјРµС† {i + 1}: {PetForm.deadPetLifespans[i].TotalSeconds:F0} СЃРµРєСѓРЅРґ\n";
             }
             infoLabel.Text = info;
         }
     }
 
-    // Главная программа с NotifyIcon
     static class Program
     {
         private static NotifyIcon trayIcon;
@@ -44,17 +43,15 @@ namespace DesktopPet
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            // Создание значка в системном трее
             trayIcon = new NotifyIcon();
             trayIcon.Icon = SystemIcons.Application;
             trayIcon.Visible = true;
             trayIcon.Text = "Desktop Pet";
             ContextMenuStrip trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Настройки", null, OnSettingsClicked);
-            trayMenu.Items.Add("Выход", null, OnExitClicked);
+            trayMenu.Items.Add("РќР°СЃС‚СЂРѕР№РєРё", null, OnSettingsClicked);
+            trayMenu.Items.Add("Р’С‹С…РѕРґ", null, OnExitClicked);
             trayIcon.ContextMenuStrip = trayMenu;
 
-            // Запуск окна питомца
             PetForm petForm = new PetForm();
             Application.Run(petForm);
         }

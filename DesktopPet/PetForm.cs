@@ -13,8 +13,11 @@ namespace DesktopPet
     public class PetForm : Form
     {
         private Image petImage;
+        private List<Image> petFrames = new List<Image>();
+        private int currentFrame = 0;
         private Timer moveTimer;
         private Timer stateTimer;
+        private Timer animationTimer;
 
         // Параметры движения
         private float currentX;
@@ -65,6 +68,43 @@ namespace DesktopPet
             public RECT rc;
             public Int32 lParam;
         }
+        // В PetForm.cs добавьте следующие P/Invoke объявления и константы
+        private const int WH_CALLWNDPROC = 4;
+        private const int WM_WINDOWPOSCHANGED = 0x0047;
+        private static IntPtr hHook = IntPtr.Zero;
+        private static PetForm _instance;
+        private static NativeCallbackDelegate callbackDelegate;
+
+// Делегат для обратного вызова
+        private delegate IntPtr NativeCallbackDelegate(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CWPSTRUCT
+        {
+            public IntPtr lParam;
+            public IntPtr wParam;
+            public uint message;
+            public IntPtr hwnd;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWindowsHookEx(int idHook, NativeCallbackDelegate lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
         // -------------------------------------------------------
 
         public PetForm()
@@ -78,19 +118,26 @@ namespace DesktopPet
             this.TransparencyKey = Color.Magenta;
 
             // Загрузка изображения питомца (оригинальный ресурс)
-            try
+            for (int i = 0; i < 2; i++) // предполагаем, что есть 4 кадра
             {
-                petImage = Image.FromFile("Images/Capy/frame_0.png");
-            }
-            catch
-            {
-                petImage = new Bitmap(100, 100);
-                using (Graphics g = Graphics.FromImage(petImage))
+                try
                 {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    g.FillEllipse(Brushes.Blue, 0, 0, 100, 100);
+                    petFrames.Add(Image.FromFile($"Images/Capy/frame_{i}.png"));
+                }
+                catch
+                {
+                    // Обработка ошибки
+             
+                    var image = new Bitmap(100, 100);
+                    using (Graphics g = Graphics.FromImage(image))
+                    {
+                        g.SmoothingMode = SmoothingMode.AntiAlias;
+                        g.FillEllipse(Brushes.Blue, 0, 0, 100, 100);
+                    }   
+                    petFrames.Add(image);
                 }
             }
+            petImage = petFrames[0];
             // Не используем размер изображения для окна – используем фиксированные размеры
 
             // Инициализация позиции – случайное положение по горизонтали
@@ -113,6 +160,12 @@ namespace DesktopPet
             moveTimer.Tick += MoveTimer_Tick;
             moveTimer.Start();
 
+            // Создание таймера анимации
+            animationTimer = new Timer();
+            animationTimer.Interval = 200; // 5 кадров в секунду
+            animationTimer.Tick += AnimationTimer_Tick;
+            animationTimer.Start();
+            
             // Таймер для обновления состояний
             stateTimer = new Timer();
             stateTimer.Interval = 1000;
@@ -131,6 +184,31 @@ namespace DesktopPet
             this.DoubleBuffered = true;
 
             SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
+            
+            _instance = this;
+    
+            // Установка Windows Hook для отслеживания изменений положения окон
+            callbackDelegate = new NativeCallbackDelegate(WindowProcCallback);
+            IntPtr taskbarHwnd = FindWindow("Shell_TrayWnd", null);
+            if (taskbarHwnd != IntPtr.Zero)
+            {
+                uint processId;
+                uint threadId = GetWindowThreadProcessId(taskbarHwnd, out processId);
+                if (threadId != 0)
+                {
+                    hHook = SetWindowsHookEx(WH_CALLWNDPROC, callbackDelegate, IntPtr.Zero, threadId);
+                }
+            }
+        }
+        
+        private void AnimationTimer_Tick(object sender, EventArgs e)
+        {
+            if (petFrames.Count > 1) // Только если есть несколько кадров
+            {
+                currentFrame = (currentFrame + 1) % petFrames.Count;
+                petImage = petFrames[currentFrame];
+                Invalidate(); // Перерисовка формы
+            }
         }
 
         private void SystemEvents_UserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
@@ -158,19 +236,50 @@ namespace DesktopPet
         {
             Rectangle screenBounds = Screen.PrimaryScreen.Bounds;
             Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
-            int tolerance = 5;
-
+    
+            // Найдем фактическое текущее положение панели задач
+            IntPtr taskbarHwnd = FindWindow("Shell_TrayWnd", null);
+            RECT taskbarRect;
             int targetY;
-            if (Math.Abs(screenBounds.Bottom - workingArea.Bottom) <= tolerance)
+    
+            if (taskbarHwnd != IntPtr.Zero && GetWindowRect(taskbarHwnd, out taskbarRect))
             {
-                targetY = screenBounds.Bottom - this.Height;
+                // Проверяем, в какой части экрана находится панель задач
+                if (taskbarRect.top > screenBounds.Height / 2) // Панель задач снизу
+                {
+                    targetY = taskbarRect.top - this.Height;
+                }
+                else if (taskbarRect.left > screenBounds.Width / 2) // Панель задач справа
+                {
+                    targetY = this.Location.Y; // Не меняем Y
+                }
+                else if (taskbarRect.right < screenBounds.Width / 2) // Панель задач слева
+                {
+                    targetY = this.Location.Y; // Не меняем Y
+                }
+                else // Панель задач сверху
+                {
+                    targetY = taskbarRect.bottom;
+                }
             }
             else
             {
-                Rectangle taskbarRect = GetTaskbarRectangle();
-                targetY = taskbarRect.Top - this.Height;
+                // Если не можем получить положение панели задач, используем WorkingArea
+                if (Math.Abs(screenBounds.Bottom - workingArea.Bottom) <= 5)
+                {
+                    targetY = screenBounds.Bottom - this.Height;
+                }
+                else
+                {
+                    targetY = workingArea.Bottom - this.Height;
+                }
             }
-            this.Location = new Point(this.Location.X, targetY);
+    
+            // Плавно перемещаем питомца к новой позиции
+            if (Math.Abs(this.Location.Y - targetY) > 2)
+            {
+                this.Location = new Point(this.Location.X, targetY);
+            }
         }
 
         private void MoveTimer_Tick(object sender, EventArgs e)
@@ -224,27 +333,69 @@ namespace DesktopPet
             if (hunger >= MAX_HUNGER_STATE || loneliness >= MAX_LONELINESS_STATE)
                 PetDies();
         }
+        private static IntPtr WindowProcCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                CWPSTRUCT cwp = (CWPSTRUCT)Marshal.PtrToStructure(lParam, typeof(CWPSTRUCT));
+        
+                // Проверяем, не сообщение ли это об изменении положения панели задач
+                if (cwp.message == WM_WINDOWPOSCHANGED)
+                {
+                    IntPtr taskbarHwnd = FindWindow("Shell_TrayWnd", null);
+                    if (cwp.hwnd == taskbarHwnd)
+                    {
+                        // Вызываем метод UpdateVerticalPosition через Invoke, 
+                        // так как мы находимся в другом потоке
+                        if (_instance != null && !_instance.IsDisposed)
+                        {
+                            _instance.BeginInvoke(new Action(_instance.UpdateVerticalPosition));
+                        }
+                    }
+                }
+            }
+    
+            return CallNextHookEx(hHook, nCode, wParam, lParam);
+        }
 
         private void PetDies()
         {
             isDead = true;
             moveTimer.Stop();
             stateTimer.Stop();
+            animationTimer.Stop(); // Останавливаем анимацию
             TimeSpan lifespan = DateTime.Now - petCreationTime;
             deadPetLifespans.Add(lifespan);
             Invalidate();
             MessageBox.Show("Питомец умер...");
         }
+        // Добавьте в PetForm.cs для диагностики:
+        private void LogDiagnosticInfo()
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Desktop), 
+                "petlog.txt");
+    
+            using (StreamWriter sw = File.AppendText(path))
+            {
+                sw.WriteLine($"[{DateTime.Now}] Visibility check:");
+                sw.WriteLine($"Location: {this.Location}, Size: {this.Size}");
+                sw.WriteLine($"TransparencyKey: {this.TransparencyKey}");
+                sw.WriteLine($"WorkingArea: {Screen.PrimaryScreen.WorkingArea}");
+            }
+        }
         private void PetForm_MouseEnter(object sender, EventArgs e)
         {
             isHovering = true;
 
-            // Центрируем всплывающее окно относительно питомца
+            // Центрируем с проверкой границ экрана
             Point popupLocation = new Point(
-                this.Location.X + (this.Width - popupForm.Width) / 2,
-                this.Location.Y - popupForm.Height - 5
+                Math.Max(0, Math.Min(Screen.PrimaryScreen.Bounds.Width - popupForm.Width, 
+                    this.Location.X + (this.Width - popupForm.Width) / 2)),
+                Math.Max(0, this.Location.Y - popupForm.Height - 5)
             );
             popupForm.Location = popupLocation;
+            
             popupForm.UpdateState(hunger, loneliness, MAX_HUNGER_STATE, MAX_LONELINESS_STATE);
             popupForm.Show();
 
@@ -301,11 +452,15 @@ namespace DesktopPet
                 if (feedButtonRect.Contains(e.Location))
                 {
                     hunger = 0;
+                    // для немедленного обновления прогресс-бара
+                    popupForm.UpdateState(hunger, loneliness, MAX_HUNGER_STATE, MAX_LONELINESS_STATE);
                     Invalidate();
                 }
                 else if (petButtonRect.Contains(e.Location))
                 {
                     loneliness = 0;
+                    // для немедленного обновления прогресс-бара
+                    popupForm.UpdateState(hunger, loneliness, MAX_HUNGER_STATE, MAX_LONELINESS_STATE);
                     Invalidate();
                 }
             }
@@ -326,6 +481,7 @@ namespace DesktopPet
             petCreationTime = DateTime.Now;
             moveTimer.Start();
             stateTimer.Start();
+            animationTimer.Start(); // Возобновляем анимацию
             Invalidate();
         }
         protected override void OnPaint(PaintEventArgs e)
@@ -412,6 +568,19 @@ namespace DesktopPet
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            animationTimer.Stop();
+            animationTimer.Dispose();
+    
+            foreach (var frame in petFrames)
+            {
+                frame.Dispose();
+            }
+            if (hHook != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(hHook);
+                hHook = IntPtr.Zero;
+            }
+    
             SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
             base.OnFormClosing(e);
         }

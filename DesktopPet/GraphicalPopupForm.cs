@@ -26,9 +26,10 @@ namespace DesktopPet
             this.TopMost = true;
             this.DoubleBuffered = true;
 
-            // Прозрачный фон с закруглёнными краями
-            this.BackColor = Color.Magenta;
-            this.TransparencyKey = Color.Magenta;
+            // Прозрачный фон с закруглёнными краями// Используйте более стабильное решение:
+            this.AllowTransparency = true;
+            this.BackColor = Color.Gray;
+            this.TransparencyKey = Color.Gray;
         }
 
         public void UpdateState(int hunger, int loneliness, int maxhunger, int maxloneliness)
